@@ -67,7 +67,7 @@ jobs:
   # Job 2: install, build the database on real MySQL, run the tests.
   # ---------------------------------------------------------------------------
   tests:
-    name: Tests (PHP 8.3 + MySQL)
+    name: Tests (PHP 8.4 + MySQL)
     runs-on: ubuntu-latest
     needs: lint
 
@@ -95,7 +95,7 @@ jobs:
 
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.3'
+          php-version: '8.4'
           extensions: pdo_mysql, mbstring, bcmath
           tools: composer:v2
           coverage: none
