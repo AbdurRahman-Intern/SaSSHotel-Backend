@@ -50,18 +50,25 @@ class HotelController extends Controller
     }
 
     /**
-     * POST /api/hotels
-     * Body also needs `ownerPassword` (initial password for the owner login).
+     * POST /api/hotels  -  registers a hotel AND creates its owner login.
+     *
+     * `ownerPassword` is optional. When it is missing, the server generates a random 12-character password
+     * and returns it ONCE as `temporaryPassword` in the response. The Super Admin must hand it to the owner
+     * (it is never stored in readable form and can not be shown again).
+     * TODO (later): replace this with an invitation e-mail containing a "set your password" link.
      */
     public function store(Request $request)
     {
-        $data = $request->validate($this->rules() + [
-            'ownerPassword' => ['required', 'string', 'min:8'],
+        $data = $request->validate(array_merge($this->rules(), [
+            'ownerPassword' => ['nullable', 'string', 'min:8'],
             // unique:users = the owner's e-mail becomes the login, so it must not exist yet.
             'ownerEmail' => ['required', 'email', 'unique:users,email'],
-        ]);
+        ]));
 
-        $hotel = DB::transaction(function () use ($data) {
+        $generated = empty($data['ownerPassword']);
+        $password = $generated ? Str::password(12) : $data['ownerPassword'];
+
+        $hotel = DB::transaction(function () use ($data, $password) {
             $hotel = Hotel::create([
                 'name' => $data['name'],
                 'slug' => Str::slug($data['name']) . '-' . Str::lower(Str::random(4)),
@@ -79,7 +86,7 @@ class HotelController extends Controller
             User::create([
                 'name' => $data['ownerName'],
                 'email' => $data['ownerEmail'],
-                'password' => $data['ownerPassword'], // hashed automatically by the User cast
+                'password' => $password, // hashed automatically by the User cast
                 'role' => 'hotel_owner',
                 'tenant_id' => $hotel->id,
             ]);
@@ -89,7 +96,13 @@ class HotelController extends Controller
             return $hotel;
         });
 
-        return (new HotelResource($hotel))->response()->setStatusCode(Response::HTTP_CREATED);
+        // The normal hotel JSON, plus the generated password (only when we generated one).
+        $json = (new HotelResource($hotel))->resolve();
+        if ($generated) {
+            $json['temporaryPassword'] = $password;
+        }
+
+        return response()->json($json, Response::HTTP_CREATED);
     }
 
     /** PATCH /api/hotels/{id}  (also used to suspend/activate: send {"status":"suspended"}) */

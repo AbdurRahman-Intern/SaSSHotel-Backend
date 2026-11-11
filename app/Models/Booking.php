@@ -12,9 +12,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * Booking  -  an event reservation.
  *
  * FORMULAS (must match src/lib/domain.ts in the React app):
- *   total     = guest_count x food_price_per_person + photography + decoration + service_charge + other_charges - discount
+ *   total     = max(0, guest_count x food_price_per_person + photography + decoration + service_charge + other_charges - discount)
  *   received  = advance_paid + SUM(payments)
- *   remaining = total - received
+ *   remaining = max(0, total - received)
  */
 class Booking extends Model
 {
@@ -47,12 +47,14 @@ class Booking extends Model
         return $this->belongsTo(Menu::class);
     }
 
-    /** Estimated total of the event. */
+    /** Estimated total of the event. Never below 0, even if the discount is bigger than the price. */
     public function total(): float
     {
-        return $this->guest_count * $this->food_price_per_person
+        $subtotal = $this->guest_count * $this->food_price_per_person
             + $this->photography_price + $this->decoration_price
-            + $this->service_charge + $this->other_charges - $this->discount;
+            + $this->service_charge + $this->other_charges;
+
+        return max(0, $subtotal - $this->discount);
     }
 
     /** Cash actually received so far. Needs the `payments` relation (eager-load it to avoid N+1 queries). */
@@ -61,8 +63,9 @@ class Booking extends Model
         return $this->advance_paid + (float) $this->payments->sum('amount');
     }
 
+    /** What the client still owes. Never below 0 (an overpayment does not become a negative balance). */
     public function remaining(): float
     {
-        return $this->total() - $this->received();
+        return max(0, $this->total() - $this->received());
     }
 }
