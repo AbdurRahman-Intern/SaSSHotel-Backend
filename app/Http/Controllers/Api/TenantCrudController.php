@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 /**
@@ -115,8 +116,12 @@ abstract class TenantCrudController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate($this->rules(null));
-        $model = ($this->modelClass())::create($this->prepare($this->toColumns($validated)));
-        $this->saved($model, $validated);
+        $model = DB::transaction(function () use ($validated) {
+            $model = ($this->modelClass())::create($this->prepare($this->toColumns($validated)));
+            $this->saved($model, $validated);
+
+            return $model;
+        });
 
         return (new ($this->resourceClass())($model->fresh($this->with())))
             ->response()->setStatusCode(Response::HTTP_CREATED);

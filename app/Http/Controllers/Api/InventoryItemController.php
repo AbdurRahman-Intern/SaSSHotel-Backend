@@ -42,16 +42,12 @@ class InventoryItemController extends TenantCrudController
         return $data;
     }
 
-    /** `quantity` is not in $fillable (protected), so set it explicitly for new rows. */
-    public function store(\Illuminate\Http\Request $request)
+    /** Set the opening quantity before the response loads the new row. */
+    protected function saved(Model $model, array $validated): void
     {
-        $response = parent::store($request);
-
-        if ($request->filled('quantity')) {
-            InventoryItem::where('id', $response->getData()->id)->update(['quantity' => $request->input('quantity')]);
-            // TODO (nicer): record the opening balance as a stock-in movement so the ledger adds up.
+        if ($model->wasRecentlyCreated && isset($validated['quantity'])) {
+            $model->quantity = $validated['quantity'];
+            $model->save();
         }
-
-        return $response;
     }
 }

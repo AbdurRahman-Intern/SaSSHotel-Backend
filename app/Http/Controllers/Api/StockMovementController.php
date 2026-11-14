@@ -9,6 +9,7 @@ use App\Services\StockService;
 use App\Support\Tenancy;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\DB;
 
 /**
  * StockMovementController  -  the warehouse ledger.
@@ -39,37 +40,64 @@ class StockMovementController extends Controller
 
     public function stockIn(Request $request)
     {
-        $data = $request->validate($this->rules() + [
+        return $this->move($request, 'stockIn', ['supplier' => ['required', 'string', 'max:255']], [
             'unitCost' => ['required', 'numeric', 'min:0'],
-            'supplier' => ['required', 'string', 'max:255'],
         ]);
-
-        return $this->created($this->stock->stockIn($data));
     }
 
     public function stockOut(Request $request)
     {
-        $data = $request->validate($this->rules() + [
-            'bookingId' => ['nullable', Tenancy::exists('bookings')],
-        ]);
+        return $this->move($request, 'stockOut', ['bookingId' => ['nullable', Tenancy::exists('bookings')]]);
+    }
 
-        return $this->created($this->stock->stockOut($data));
+    /**
+     * Keep the single-item API and accept one batch for the React warehouse forms.
+     */
+    private function move(Request $request, string $action, array $rules, array $lineRules = [])
+    {
+        $shared = $this->movementRules() + $rules;
+        $lineRules = $this->lineRules() + $lineRules;
+
+        if (! $request->has('lines')) {
+            return $this->created($this->stock->{$action}($request->validate($shared + $lineRules)));
+        }
+
+        $rules = $shared + ['lines' => ['required', 'array', 'min:1'], 'lines.*' => ['required', 'array']];
+        foreach ($lineRules as $field => $fieldRules) {
+            $rules["lines.*.{$field}"] = $fieldRules;
+        }
+        $data = $request->validate($rules);
+        $lines = array_map(fn (array $line) => array_intersect_key($line, $lineRules), $data['lines']);
+        $common = array_intersect_key($data, $shared);
+        $movements = DB::transaction(function () use ($lines, $common, $action) {
+            return array_map(fn (array $line) => $this->stock->{$action}($common + $line), $lines);
+        }, 3);
+
+        return StockMovementResource::collection(collect($movements))->response()->setStatusCode(Response::HTTP_CREATED);
     }
 
     public function spoilage(Request $request)
     {
-        return $this->created($this->stock->spoilage($request->validate($this->rules())));
+        $data = $request->validate($this->movementRules() + $this->lineRules());
+
+        return $this->created($this->stock->spoilage($data));
     }
 
-    /** Rules shared by the three POST endpoints. */
-    private function rules(): array
+    private function movementRules(): array
+    {
+        return [
+            'date' => ['required', 'date'],
+            'reference' => ['nullable', 'string', 'max:255'],
+            'notes' => ['nullable', 'string'],
+        ];
+    }
+
+    /** Fields for each item that is moved. */
+    private function lineRules(): array
     {
         return [
             'itemId' => ['required', Tenancy::exists('inventory_items')],
             'quantity' => ['required', 'numeric', 'gt:0'],
-            'date' => ['required', 'date'],
-            'reference' => ['nullable', 'string', 'max:255'],
-            'notes' => ['nullable', 'string'],
         ];
     }
 

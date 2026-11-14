@@ -6,6 +6,7 @@ use App\Http\Resources\LoanResource;
 use App\Models\Loan;
 use App\Models\LoanRepayment;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -33,19 +34,23 @@ class LoanController extends TenantCrudController
     /** Record a (partial) repayment. Cannot pay more than what is still outstanding. */
     public function addRepayment(Request $request, string $id)
     {
-        $loan = Loan::with('repayments')->findOrFail($id);
-
         $data = $request->validate([
             'date' => ['required', 'date'],
             'amount' => ['required', 'numeric', 'gt:0'],
         ]);
 
-        if ($data['amount'] > $loan->outstanding()) {
-            throw ValidationException::withMessages(['amount' => 'The repayment is larger than the outstanding amount.']);
-        }
+        $loan = DB::transaction(function () use ($id, $data) {
+            $loan = Loan::with('repayments')->lockForUpdate()->findOrFail($id);
 
-        LoanRepayment::create(['loan_id' => $loan->id, 'paid_on' => $data['date'], 'amount' => $data['amount']]);
+            if ($data['amount'] > $loan->outstanding()) {
+                throw ValidationException::withMessages(['amount' => 'The repayment is larger than the outstanding amount.']);
+            }
 
-        return new LoanResource($loan->fresh('repayments'));
+            LoanRepayment::create(['loan_id' => $loan->id, 'paid_on' => $data['date'], 'amount' => $data['amount']]);
+
+            return $loan->fresh('repayments');
+        });
+
+        return new LoanResource($loan);
     }
 }
