@@ -23,4 +23,10 @@ class Menu extends Model
     {
         return $this->hasMany(MenuIngredient::class);
     }
+
+    /** $menu->bookings : the bookings that chose this menu (used to refuse deleting a menu that is in use). */
+    public function bookings(): HasMany
+    {
+        return $this->hasMany(Booking::class);
+    }
 }

@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\ExpenseController;
 use App\Http\Controllers\Api\ExternalIncomeController;
 use App\Http\Controllers\Api\HallController;
 use App\Http\Controllers\Api\HotelController;
+use App\Http\Controllers\Api\HotelOwnerController;
 use App\Http\Controllers\Api\InventoryItemController;
 use App\Http\Controllers\Api\LoanController;
 use App\Http\Controllers\Api\MenuController;
@@ -15,6 +16,7 @@ use App\Http\Controllers\Api\OwnHotelController;
 use App\Http\Controllers\Api\PartnerController;
 use App\Http\Controllers\Api\PlanController;
 use App\Http\Controllers\Api\PlatformController;
+use App\Http\Controllers\Api\PlatformSettingsController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\RequisitionController;
 use App\Http\Controllers\Api\SalaryPaymentController;
@@ -52,10 +54,19 @@ Route::middleware('auth:sanctum')->group(function () {
     // ---------- SUPER ADMIN ONLY ----------
     Route::middleware('role:super_admin')->group(function () {
         Route::apiResource('hotels', HotelController::class);
+        // Owner login of a hotel: change name/e-mail, reset a forgotten password.
+        Route::patch('/hotels/{id}/owner', [HotelOwnerController::class, 'update']);
+        Route::post('/hotels/{id}/owner/reset-password', [HotelOwnerController::class, 'resetPassword']);
         Route::get('/users', [PlatformController::class, 'users']);
         Route::get('/platform/stats', [PlatformController::class, 'stats']);
         Route::get('/platform/activity', [PlatformController::class, 'activity']);
-        // TODO: plans CRUD, platform settings.
+
+        // Plans: GET /plans (list) is open to every logged-in user above; changing plans is Super Admin only.
+        Route::apiResource('plans', PlanController::class)->only(['store', 'update', 'destroy']);
+
+        // Platform settings (name, support contacts, defaults).
+        Route::get('/platform/settings', [PlatformSettingsController::class, 'show']);
+        Route::patch('/platform/settings', [PlatformSettingsController::class, 'update']);
     });
 
     // ---------- HOTEL OWNER ONLY (and hotel not suspended) ----------

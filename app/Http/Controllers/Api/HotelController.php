@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 /**
  * HotelController  -  SUPER ADMIN only (see routes/api.php): manage the hotels (tenants).
@@ -127,6 +128,11 @@ class HotelController extends Controller
         }
         $hotel->update($changes);
 
+        // The owner's name lives in two places (hotels.owner_name and users.name). Keep them equal.
+        if (isset($changes['owner_name'])) {
+            User::where('tenant_id', $hotel->id)->where('email', $hotel->owner_email)->update(['name' => $changes['owner_name']]);
+        }
+
         if (($changes['status'] ?? null) === 'suspended') {
             ActivityLog::record("Hotel suspended: {$hotel->name}");
         }
@@ -134,10 +140,34 @@ class HotelController extends Controller
         return new HotelResource($hotel);
     }
 
-    /** DELETE /api/hotels/{id} - TODO: decide policy (soft delete? block when it has data?). */
+    /**
+     * DELETE /api/hotels/{id}  ->  204
+     *
+     * PERMANENTLY deletes the hotel, its owner login(s) and ALL of its data (bookings, stock, staff, finances ...).
+     * The business tables are linked to the hotel with ON DELETE CASCADE, so MySQL removes their rows by itself.
+     * The `users` table is linked with RESTRICT (safer), so we delete the users first, in the same transaction.
+     *
+     * SAFETY: only a SUSPENDED hotel can be deleted. That forces a deliberate two-step: suspend first, delete after.
+     * It also means nobody is logged in and working while their data disappears.
+     * TODO (recommended before real customers): soft deletes or an export/backup of the hotel before deleting.
+     */
     public function destroy(string $id)
     {
-        Hotel::findOrFail($id)->delete();
+        $hotel = Hotel::findOrFail($id);
+
+        if ($hotel->status !== 'suspended') {
+            throw ValidationException::withMessages(['hotel' => 'Suspend the hotel before deleting it.']);
+        }
+
+        DB::transaction(function () use ($hotel) {
+            foreach ($hotel->users as $user) {
+                $user->tokens()->delete(); // log the person out everywhere
+                $user->delete();
+            }
+            $hotel->delete(); // cascades to every business table
+        });
+
+        ActivityLog::record("Hotel deleted: {$hotel->name}");
 
         return response()->noContent();
     }
