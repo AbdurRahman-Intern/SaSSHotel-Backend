@@ -11,6 +11,7 @@ use App\Models\ExternalIncome;
 use App\Models\InventoryItem;
 use App\Models\Loan;
 use App\Models\SalaryPayment;
+use App\Models\StockMovement;
 use Illuminate\Support\Collection;
 
 /**
@@ -34,7 +35,14 @@ use Illuminate\Support\Collection;
  *   "income"           = CASH RECEIVED on bookings (advance + later payments) + external income (parking ...).
  *                        It is NOT the contract value. Contract value ("booked revenue") belongs in Reports.
  *   "expenses"         = rows of the expenses table only. Salaries are reported separately.
+ *   "salaries"         = salary payments with status "paid", NET pay, grouped by the salary's own month (YYYY-MM).
+ *   "stock purchases"  = warehouse stock-IN movements: quantity x unit cost, grouped by the purchase date.
+ *                        Stock-OUT (hawala) and spoilage are NOT costs here: the money was already spent when the
+ *                        stock was bought, so counting them again would double-count.
+ *   "profit"           = income - expenses - salaries - stock purchases.   A NEGATIVE number is a LOSS.
+ *                        This is CASH profit: money received minus money spent. It is not the booked contract value.
  *   NOT counted anywhere: partner withdrawals and loan repayments (they are not operating costs).
+ *   !! Do not also record a food purchase as an expense: it would be counted twice.
  *
  * PERFORMANCE NOTE
  *   For clarity we load the rows into PHP "Collections" and calculate there (easy to read and debug).
@@ -63,16 +71,20 @@ class DashboardService
         $income = ExternalIncome::all();
         $items = InventoryItem::all();
         $loans = Loan::with('repayments')->get();
+        // Paid salaries (net pay). Used for the salary cost in the profit/loss numbers.
+        $paidSalaries = SalaryPayment::where('status', 'paid')->get();
+        // Stock bought (stock-in). Used for the stock cost in the profit/loss numbers.
+        $purchases = StockMovement::where('type', 'in')->get();
 
         // Live bookings are used by almost every number below.
         $live = $bookings->filter(fn (Booking $b) => $this->isLive($b))->values();
 
         // ---- 2. The 12-month series for the chart ------------------------------------------------
-        $monthly = $this->monthlySeries($year, $live, $income, $expenses);
+        $monthly = $this->monthlySeries($year, $live, $income, $expenses, $paidSalaries, $purchases);
 
         // The current month's row. If the selected year is not the current year, this month is not in the
         // series, so the month numbers are 0 (same behaviour as the React version).
-        $monthRow = $monthly->firstWhere('month', $thisMonth) ?? ['income' => 0, 'expenses' => 0, 'weddings' => 0];
+        $monthRow = $monthly->firstWhere('month', $thisMonth) ?? ['income' => 0, 'expenses' => 0, 'salaries' => 0, 'stock' => 0, 'profit' => 0, 'weddings' => 0];
 
         // ---- 3. Upcoming events ------------------------------------------------------------------
         $upcoming = $live
@@ -99,6 +111,14 @@ class DashboardService
             'yearIncome' => $this->money($monthly->sum('income')),
             'monthExpenses' => $monthRow['expenses'],
             'yearExpenses' => $this->money($monthly->sum('expenses')),
+
+            // Profit / loss = income - expenses - salaries - stock purchases. Negative = loss. Month = the current month, year = the selected year.
+            'monthSalaries' => $monthRow['salaries'],
+            'monthStock' => $monthRow['stock'],
+            'yearStock' => $this->money($monthly->sum('stock')),
+            'yearSalaries' => $this->money($monthly->sum('salaries')),
+            'monthProfit' => $monthRow['profit'],
+            'yearProfit' => $this->money($monthly->sum('profit')),
             'monthWeddings' => $monthRow['weddings'],
             'yearWeddings' => (int) $monthly->sum('weddings'),
 
@@ -176,13 +196,16 @@ class DashboardService
      * - income   : cash received on live bookings whose EVENT is in that month + external income dated in that month.
      *              (Cash is grouped by the event month, not by the day the payment arrived. Same as the prototype.)
      * - expenses : expenses dated in that month.
+ * - salaries : net salaries paid for that month.
+ * - stock    : stock bought (stock-in) in that month.
+ * - profit   : income - expenses - salaries - stock (negative = loss).
      * - weddings : number of live bookings in that month (every event type, the name is historical).
      *
-     * @return Collection<int, array{month:string, income:float, expenses:float, weddings:int}>
+     * @return Collection<int, array{month:string, income:float, expenses:float, salaries:float, stock:float, profit:float, weddings:int}>
      */
-    private function monthlySeries(int $year, Collection $live, Collection $income, Collection $expenses): Collection
+    private function monthlySeries(int $year, Collection $live, Collection $income, Collection $expenses, Collection $paidSalaries, Collection $purchases): Collection
     {
-        return collect(range(1, 12))->map(function (int $m) use ($year, $live, $income, $expenses) {
+        return collect(range(1, 12))->map(function (int $m) use ($year, $live, $income, $expenses, $paidSalaries, $purchases) {
             $key = sprintf('%d-%02d', $year, $m); // '2026-03'
 
             $monthBookings = $live->filter(fn (Booking $b) => $b->event_date->format('Y-m') === $key);
@@ -192,10 +215,20 @@ class DashboardService
 
             $spent = $expenses->filter(fn ($x) => $x->spent_on->format('Y-m') === $key)->sum('amount');
 
+            // Net salaries paid for this month (salary rows store their month as 'YYYY-MM').
+            $salaries = $paidSalaries->where('month', $key)->sum(fn (SalaryPayment $p) => $p->net());
+
+            // Stock bought in this month: quantity x unit cost of every stock-in movement.
+            $stock = $purchases->filter(fn (StockMovement $mv) => $mv->moved_on->format('Y-m') === $key)
+                ->sum(fn (StockMovement $mv) => $mv->quantity * $mv->unit_cost);
+
             return [
                 'month' => $key,
                 'income' => $this->money($cash),
                 'expenses' => $this->money($spent),
+                'salaries' => $this->money($salaries),
+                'stock' => $this->money($stock),
+                'profit' => $this->money($cash - $spent - $salaries - $stock), // negative = loss
                 'weddings' => $monthBookings->count(),
             ];
         });

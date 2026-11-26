@@ -31,7 +31,7 @@ return [
 
     'exposed_headers' => [],
 
-    'max_age' => 0,
+    'max_age' => 3600,
 
     // We use "Authorization: Bearer <token>" headers, not cookies, so this stays false.
     'supports_credentials' => false,

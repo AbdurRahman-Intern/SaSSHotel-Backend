@@ -15,7 +15,7 @@
 #
 # REQUIRED SETTING (once, by the repo admin): Settings -> Branches -> add rules for `develop` and `main`:
 #   [x] Require a pull request before merging
-#   [x] Require status checks to pass  -> select:  "Lint & conflict markers"  and  "Tests (PHP 8.3 + MySQL)"
+#   [x] Require status checks to pass  -> select:  "Lint & conflict markers"  and  "Tests (PHP 8.4 + MySQL)"
 #   [x] Require branches to be up to date before merging
 #   [x] Do not allow direct pushes (include administrators)
 # =============================================================================
@@ -54,7 +54,7 @@ jobs:
 
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.3'
+          php-version: '8.4'
           tools: composer:v2
 
       - name: Validate composer.json
